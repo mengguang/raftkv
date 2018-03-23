@@ -83,11 +83,7 @@ func ExampleCommand() {
 	command := fmt.Sprintf("pay %s %s %d %d %s", rootPubKey, destPubKey, amount, ri, signStr)
 	fmt.Println(command)
 	result := verifyTransaction(rootPubKey, destPubKey, strconv.Itoa(amount), strconv.FormatUint(uint64(ri), 10), signStr)
-	if result {
-		fmt.Println("verify ok.")
-	} else {
-		fmt.Println("verify failed.")
-	}
+	fmt.Printf("result : %v\n", result)
 }
 
 func verifyTransaction(from string, to string, amount string, ri string, sign string) bool {

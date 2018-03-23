@@ -32,6 +32,7 @@ var (
 	ErrAccountError = errors.New("account error")
 	ErrInvalidArguments = errors.New("invalid arguments")
 	ErrSignature = errors.New("invalid signature")
+	ErrRepeatedTransactionId = errors.New("Repeated Transaction Id")
 
 )
 

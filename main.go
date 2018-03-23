@@ -93,14 +93,16 @@ func main() {
 
 // Clone represent a Redis clone machine
 type Clone struct {
-	mu   sync.RWMutex
-	keys map[string]int64
+	mu             sync.RWMutex
+	keys           map[string]int64
+	transactionIds map[string]bool
 }
 
 // NewClone create a new clone
 func NewClone() *Clone {
 	val := &Clone{
-		keys: make(map[string]int64),
+		keys:           make(map[string]int64),
+		transactionIds: make(map[string]bool),
 	}
 	val.keys["2V4NoRKExqotxJc4oX9AU4xRniJTidYSYYYmrvXuhgajvpo5XToo9rTY1wpWcUWpuhenXdo2DHnuhMCnfNddsqsi"] = 1000000000000000
 	return val
@@ -135,10 +137,10 @@ func (kvm *Clone) Command(m finn.Applier, conn redcon.Conn, cmd redcon.Command) 
 		}
 		return m.Apply(conn, cmd,
 			func() (interface{}, error) {
-				kvm.mu.Lock()
+
 				from := string(cmd.Args[1])
 				to := string(cmd.Args[2])
-				fromVal := kvm.keys[from]
+
 				//toVal := kvm.keys[to]
 				amount := string(cmd.Args[3])
 				ri := string(cmd.Args[4])
@@ -146,22 +148,28 @@ func (kvm *Clone) Command(m finn.Applier, conn redcon.Conn, cmd redcon.Command) 
 
 				result := verifyTransaction(from,to,amount,ri,sign)
 				if result == false {
-					kvm.mu.Unlock()
 					return nil, finn.ErrSignature
 				}
 				amountInt, err := strconv.ParseInt(amount,10,64)
 				if err != nil {
-					kvm.mu.Unlock()
 					return nil, finn.ErrInvalidArguments
 				}
 				if amountInt <= 0 {
-					kvm.mu.Unlock()
 					return nil, finn.ErrAccountError
 				}
+
+				kvm.mu.Lock()
+				fromVal := kvm.keys[from]
 				if fromVal < amountInt {
 					kvm.mu.Unlock()
 					return nil, finn.ErrAccountError
 				}
+				if kvm.transactionIds[ri] == true {
+					kvm.mu.Unlock()
+					return nil, finn.ErrRepeatedTransactionId
+				}
+				kvm.transactionIds[ri] = true
+
 				kvm.keys[from] = kvm.keys[from] - amountInt
 				kvm.keys[to] = kvm.keys[to] + amountInt
 				kvm.mu.Unlock()
@@ -172,24 +180,7 @@ func (kvm *Clone) Command(m finn.Applier, conn redcon.Conn, cmd redcon.Command) 
 				return nil, nil
 			},
 		)
-	case "incr":
-		if len(cmd.Args) != 2 {
-			return nil, finn.ErrWrongNumberOfArguments
-		}
-		return m.Apply(conn, cmd,
-			func() (interface{}, error) {
-				kvm.mu.Lock()
-				val := kvm.keys[string(cmd.Args[1])]
-				val = val + 1
-				kvm.keys[string(cmd.Args[1])] = val
-				kvm.mu.Unlock()
-				return nil, nil
-			},
-			func(v interface{}) (interface{}, error) {
-				conn.WriteString("OK")
-				return nil, nil
-			},
-		)
+
 	case "get":
 		if len(cmd.Args) != 2 {
 			return nil, finn.ErrWrongNumberOfArguments
@@ -257,6 +248,11 @@ func (kvm *Clone) Command(m finn.Applier, conn redcon.Conn, cmd redcon.Command) 
 	}
 }
 
+type HashData struct {
+	keys           map[string]int64
+	transactionIds map[string]bool
+}
+
 // Restore restores a snapshot
 func (kvm *Clone) Restore(rd io.Reader) error {
 	kvm.mu.Lock()
@@ -265,11 +261,15 @@ func (kvm *Clone) Restore(rd io.Reader) error {
 	if err != nil {
 		return err
 	}
-	var keys map[string]int64
-	if err := json.Unmarshal(data, &keys); err != nil {
+
+	var hdata HashData
+
+	if err := json.Unmarshal(data, &hdata); err != nil {
 		return err
 	}
-	kvm.keys = keys
+
+	kvm.keys = hdata.keys
+	kvm.transactionIds = hdata.transactionIds
 	return nil
 }
 
@@ -277,7 +277,10 @@ func (kvm *Clone) Restore(rd io.Reader) error {
 func (kvm *Clone) Snapshot(wr io.Writer) error {
 	kvm.mu.RLock()
 	defer kvm.mu.RUnlock()
-	data, err := json.Marshal(kvm.keys)
+	var hdata HashData
+	hdata.keys = kvm.keys
+	hdata.transactionIds = kvm.transactionIds
+	data, err := json.Marshal(hdata)
 	if err != nil {
 		return err
 	}
